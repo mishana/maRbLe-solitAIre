@@ -10,7 +10,7 @@ from gym import spaces
 class CellState(IntEnum):
     EMPTY = 0
     FULL = 1
-    DUMMY = -1
+    DUMMY = 2
 
 
 class MarbleAction(IntEnum):
@@ -22,7 +22,6 @@ class MarbleAction(IntEnum):
 
 class MarbleSolitaireEnv(gym.Env):
     """A Marble Solitaire Environment that represents a valid board with marbles"""
-    metadata = {'render.modes': ['human']}  # TODO: understand!
 
     BOARD_HEIGHT = 7
     BOARD_WIDTH = 7
@@ -38,18 +37,20 @@ class MarbleSolitaireEnv(gym.Env):
         # They must be gym.spaces objects
 
         # start from an (i,j) source pos, and move up/down/left/right (by eating.. nom nom)
-        self.action_space = spaces.Box(low=[0, 0, 0],
-                                       high=[self.BOARD_HEIGHT - 1,
-                                             self.BOARD_WIDTH - 1,
-                                             self.MAX_ACTIONS_PER_MARBLE - 1],
-                                       shape=(self.BOARD_HEIGHT, self.BOARD_WIDTH, self.MAX_ACTIONS_PER_MARBLE),
+        self.action_space = spaces.Box(low=np.array([0, 0, 0]),
+                                       high=np.array([self.BOARD_HEIGHT - 1,
+                                                      self.BOARD_WIDTH - 1,
+                                                      self.MAX_ACTIONS_PER_MARBLE - 1]),
+                                       # shape=(self.BOARD_HEIGHT, self.BOARD_WIDTH, self.MAX_ACTIONS_PER_MARBLE),
                                        dtype=np.uint8)
 
-        # (1) - marble is placed in the cell,
         # (0) - no marble,
-        # (-1) - a dummy cell
-        self.observation_space = spaces.Box(low=CellState.DUMMY, high=CellState.FULL,
+        # (1) - marble is placed in the cell,
+        # (2) - a dummy cell
+        self.observation_space = spaces.Box(low=CellState.EMPTY, high=CellState.DUMMY,
                                             shape=(self.BOARD_HEIGHT, self.BOARD_WIDTH), dtype=np.uint8)
+
+        # additional init logic
 
         self.board = self._initial_board()  # TODO: is necessary?
         self.marbles_num = self.MAX_MARBLES_NUM
@@ -97,12 +98,29 @@ class MarbleSolitaireEnv(gym.Env):
             return j < self.BOARD_WIDTH - 2 and self.board[i, j + 1] == CellState.FULL and self.board[
                 i, j + 2] == CellState.EMPTY
 
+    def _state_reward(self):
+        return -self.marbles_num
+
+    def _finish_reward(self):
+        if self.marbles_num == 1:
+            if self.board[self.BOARD_HEIGHT // 2, self.BOARD_WIDTH // 2] == CellState.FULL:
+                return 0
+            else:
+                return -self.MAX_MARBLES_NUM
+        else:
+            return 0
+
     def step(self, action):
         # TODO: update reward/cost etc.
         # Execute one time step within the environment
         i, j, a = action
         if not self._is_valid_action(i, j, a):
-            return
+            obs = self.board
+            reward = self._state_reward() + self._finish_reward() - 1
+            done = False
+            info = {}
+
+            return obs, reward, done, info
 
         self.board[i, j] = CellState.EMPTY
 
@@ -121,6 +139,13 @@ class MarbleSolitaireEnv(gym.Env):
 
         self.marbles_num -= 1
 
+        obs = self.board
+        reward = self._state_reward() + self._finish_reward()
+        done = self.marbles_num == 1 and self.board[self.BOARD_HEIGHT // 2, self.BOARD_WIDTH // 2] == CellState.FULL
+        info = {}
+
+        return obs, reward, done, info
+
     def reset(self):
         # TODO: init cost/reward, etc... and step counter?
         # Reset the state of the environment to an initial state
@@ -129,8 +154,8 @@ class MarbleSolitaireEnv(gym.Env):
 
         return self.board
 
-    def render(self, action=None, show_action=False, show_axes=False):
-        '''
+    def render(self, action=None, show_action=False, show_axes=True):
+        """
         Renders the current state of the environment.
         Parameters
         ----------
@@ -142,13 +167,13 @@ class MarbleSolitaireEnv(gym.Env):
             the rendering, in order to be able to visualise the action selected.
         show_axes : bool (default False)
             Whether to display the axes in the rendering or not.
-        '''
+        """
         ax = plt.gca()
         ax.axes.get_xaxis().set_visible(show_axes)
         ax.axes.get_yaxis().set_visible(show_axes)
         if show_action:
             assert action is not None
-            x, y, a = action
+            y, x, a = action   # FLIP x, y here because of (i,j) and (x,y) "un-sync"
 
             if a == MarbleAction.UP:
                 dx, dy = 0, 1
@@ -162,6 +187,8 @@ class MarbleSolitaireEnv(gym.Env):
             jumped_pos = (x + dx, y + dy)
 
             for pos, value in np.ndenumerate(self.board):
+                pos = pos[::-1]   # FLIP pos here because of (i,j) and (x,y) "un-sync"
+
                 if value == CellState.FULL:
                     if pos == (x, y):
                         ax.add_patch(matplotlib.patches.Circle(xy=pos, radius=0.495, color='brown', fill=True))
@@ -176,6 +203,8 @@ class MarbleSolitaireEnv(gym.Env):
         else:
             assert action is None
             for pos, value in np.ndenumerate(self.board):
+                pos = pos[::-1]   # FLIP pos here because of (i,j) and (x,y) "un-sync"
+
                 if value == CellState.FULL:
                     ax.add_patch(matplotlib.patches.Circle(xy=pos, radius=0.495, color='burlywood', fill=True))
                 if value == CellState.EMPTY:
@@ -187,4 +216,35 @@ class MarbleSolitaireEnv(gym.Env):
         plt.axis('scaled')
         plt.title('Current State of the Board')
         self.fig.canvas.draw()
-        [p.remove() for p in reversed(ax.patches)]
+        # [p.remove() for p in reversed(ax.patches)]
+
+
+if __name__ == '__main__':
+    env = MarbleSolitaireEnv(init_fig=True, interactive_plot=True)
+    env.render()
+    plt.show()
+
+    i, j, a = 3, 1, MarbleAction.RIGHT
+    assert env._is_valid_action(i, j, a)
+    env.render(action=(i, j, a), show_action=True)
+    plt.show()
+    env.step((i, j, a))
+    env.render()
+    plt.show()
+
+    i, j, a = 3, 4, MarbleAction.LEFT
+    assert env._is_valid_action(i, j, a)
+    env.render(action=(i, j, a), show_action=True)
+    plt.show()
+    env.step((i, j, a))
+    env.render()
+    plt.show()
+
+    # rng = np.random.default_rng()
+    # for _ in range(1000):
+    #     i, j, a = rng.integers(low=[0, 0, 0], high=[6, 6, 3], size=3)
+    #     env.step((i, j, a))
+    #
+    #     if env._is_valid_action(i, j, a):
+    #         env.render(action=(i, j, a), show_action=True)
+    #         plt.show()
