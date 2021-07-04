@@ -31,7 +31,7 @@ class MarbleSolitaireEnv(gym.Env):
     MAX_MARBLES_NUM = BOARD_HEIGHT * BOARD_WIDTH - DUMMY_CELLS - 1
     MAX_ACTIONS_PER_MARBLE = len(MarbleAction)
 
-    def __init__(self):
+    def __init__(self, init_fig=False, interactive_plot=False):
         super(MarbleSolitaireEnv, self).__init__()
 
         # Define action and observation space
@@ -53,6 +53,23 @@ class MarbleSolitaireEnv(gym.Env):
 
         self.board = self._initial_board()  # TODO: is necessary?
         self.marbles_num = self.MAX_MARBLES_NUM
+
+        if init_fig:
+            self._init_fig(interactive_plot)
+        else:
+            self.interactive_plot = False
+
+    def _init_fig(self, interactive_plot=True):
+        """
+        Initializes the figure and axes for the rendering.
+        Parameters
+        ----------
+        interactive_plot : bool (default True)
+            Whether the plot is interactive or not.
+        """
+        if interactive_plot:
+            plt.ion()
+        self.fig = plt.figure(figsize=(10, 10))
 
     def _initial_board(self):
         board = np.full(fill_value=CellState.FULL, shape=(self.BOARD_HEIGHT, self.BOARD_WIDTH), dtype=np.uint8)
@@ -131,28 +148,37 @@ class MarbleSolitaireEnv(gym.Env):
         ax.axes.get_yaxis().set_visible(show_axes)
         if show_action:
             assert action is not None
-            pos_id, move_id = action
-            x, y = GRID[pos_id]
-            dx, dy = MOVES[move_id]
+            x, y, a = action
+
+            if a == MarbleAction.UP:
+                dx, dy = 0, 1
+            elif a == MarbleAction.DOWN:
+                dx, dy = 0, -1
+            elif a == MarbleAction.RIGHT:
+                dx, dy = 1, 0
+            else:  # MarbleAction.LEFT
+                dx, dy = -1, 0
+
             jumped_pos = (x + dx, y + dy)
-            for pos, value in self.pegs.items():
-                if value == 1:
+
+            for pos, value in np.ndenumerate(self.board):
+                if value == CellState.FULL:
                     if pos == (x, y):
                         ax.add_patch(matplotlib.patches.Circle(xy=pos, radius=0.495, color='brown', fill=True))
                     elif pos == jumped_pos:
                         ax.add_patch(matplotlib.patches.Circle(xy=pos, radius=0.495, color='black', fill=True))
                     else:
                         ax.add_patch(matplotlib.patches.Circle(xy=pos, radius=0.495, color='burlywood', fill=True))
-                if value == 0:
+                if value == CellState.EMPTY:
                     ax.add_patch(
                         matplotlib.patches.Circle(xy=pos, radius=0.495, color='burlywood', fill=False, linewidth=1.5))
 
         else:
             assert action is None
-            for pos, value in self.pegs.items():
-                if value == 1:
+            for pos, value in np.ndenumerate(self.board):
+                if value == CellState.FULL:
                     ax.add_patch(matplotlib.patches.Circle(xy=pos, radius=0.495, color='burlywood', fill=True))
-                if value == 0:
+                if value == CellState.EMPTY:
                     ax.add_patch(
                         matplotlib.patches.Circle(xy=pos, radius=0.495, color='burlywood', fill=False, linewidth=1.5))
 
