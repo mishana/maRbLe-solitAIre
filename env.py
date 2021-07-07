@@ -37,23 +37,20 @@ class MarbleSolitaireEnv(gym.Env):
         # They must be gym.spaces objects
 
         # start from an (i,j) source pos, and move up/down/left/right (by eating.. nom nom)
-        self.action_space = spaces.Box(low=np.array([0, 0, 0]),
-                                       high=np.array([self.BOARD_HEIGHT - 1,
-                                                      self.BOARD_WIDTH - 1,
-                                                      self.MAX_ACTIONS_PER_MARBLE - 1]),
-                                       # shape=(self.BOARD_HEIGHT, self.BOARD_WIDTH, self.MAX_ACTIONS_PER_MARBLE),
-                                       dtype=np.uint8)
+        self.action_space = spaces.MultiDiscrete([self.BOARD_HEIGHT, self.BOARD_WIDTH, self.MAX_ACTIONS_PER_MARBLE])
 
         # (0) - no marble,
         # (1) - marble is placed in the cell,
         # (2) - a dummy cell
-        self.observation_space = spaces.Box(low=CellState.EMPTY, high=CellState.DUMMY,
-                                            shape=(self.BOARD_HEIGHT, self.BOARD_WIDTH), dtype=np.uint8)
+        self.observation_space = spaces.MultiDiscrete([len(CellState)] * self.BOARD_HEIGHT * self.BOARD_WIDTH)
+        # self.observation_space = spaces.Box(low=CellState.EMPTY, high=CellState.DUMMY,
+        #                                     shape=(self.BOARD_HEIGHT, self.BOARD_WIDTH), dtype=np.uint8)
 
         # additional init logic
 
         self.board = self._initial_board()  # TODO: is necessary?
         self.marbles_num = self.MAX_MARBLES_NUM
+        self.step_counter = 0
 
         if init_fig:
             self._init_fig(interactive_plot)
@@ -110,13 +107,27 @@ class MarbleSolitaireEnv(gym.Env):
         else:
             return 0
 
+    def _reward(self):
+        return self._state_reward() + self._finish_reward() - self.step_counter
+
     def step(self, action):
+        self.step_counter += 1
+
+        i, j, a = action
+
+        if self.board[i, j] == CellState.DUMMY:
+            obs = self.board.flatten()
+            reward = self._reward() * 100
+            done = False
+            info = {}
+
+            return obs, reward, done, info
+
         # TODO: update reward/cost etc.
         # Execute one time step within the environment
-        i, j, a = action
         if not self._is_valid_action(i, j, a):
-            obs = self.board
-            reward = self._state_reward() + self._finish_reward() - 1
+            obs = self.board.flatten()
+            reward = self._reward() * 10
             done = False
             info = {}
 
@@ -139,8 +150,8 @@ class MarbleSolitaireEnv(gym.Env):
 
         self.marbles_num -= 1
 
-        obs = self.board
-        reward = self._state_reward() + self._finish_reward()
+        obs = self.board.flatten()
+        reward = self._reward()
         done = self.marbles_num == 1 and self.board[self.BOARD_HEIGHT // 2, self.BOARD_WIDTH // 2] == CellState.FULL
         info = {}
 
@@ -151,8 +162,9 @@ class MarbleSolitaireEnv(gym.Env):
         # Reset the state of the environment to an initial state
         self.board = self._initial_board()
         self.marbles_num = self.MAX_MARBLES_NUM
+        self.step_counter = 0
 
-        return self.board
+        return self.board.flatten()
 
     def render(self, action=None, show_action=False, show_axes=True):
         """
