@@ -25,7 +25,9 @@ class MarbleSolitaireEnv(gym.Env):
 
     BOARD_HEIGHT = 7
     BOARD_WIDTH = 7
-    DUMMY_CELLS = 4 * 4  # marbles can't touch here
+    DUMMY_DIM = 2
+    DUMMY_CELLS = (DUMMY_DIM ** 2) * 4  # marbles can't touch here
+    NON_DUMMY_CELLS = BOARD_HEIGHT * BOARD_WIDTH - DUMMY_CELLS
 
     MAX_MARBLES_NUM = BOARD_HEIGHT * BOARD_WIDTH - DUMMY_CELLS - 1
     MAX_ACTIONS_PER_MARBLE = len(MarbleAction)
@@ -37,12 +39,12 @@ class MarbleSolitaireEnv(gym.Env):
         # They must be gym.spaces objects
 
         # start from an (i,j) source pos, and move up/down/left/right (by eating.. nom nom)
-        self.action_space = spaces.MultiDiscrete([self.BOARD_HEIGHT, self.BOARD_WIDTH, self.MAX_ACTIONS_PER_MARBLE])
+        self.action_space = spaces.MultiDiscrete([self.NON_DUMMY_CELLS, self.MAX_ACTIONS_PER_MARBLE])
 
         # (0) - no marble,
         # (1) - marble is placed in the cell,
         # (2) - a dummy cell
-        self.observation_space = spaces.MultiDiscrete([len(CellState)] * self.BOARD_HEIGHT * self.BOARD_WIDTH)
+        self.observation_space = spaces.MultiDiscrete([len(CellState) - 1] * self.NON_DUMMY_CELLS)
         # self.observation_space = spaces.Box(low=CellState.EMPTY, high=CellState.DUMMY,
         #                                     shape=(self.BOARD_HEIGHT, self.BOARD_WIDTH), dtype=np.uint8)
 
@@ -51,6 +53,9 @@ class MarbleSolitaireEnv(gym.Env):
         self.board = self._initial_board()  # TODO: is necessary?
         self.marbles_num = self.MAX_MARBLES_NUM
         self.step_counter = 0
+
+        self._idx_to_i_j = {idx: self.idx_to_i_j(idx) for idx in range(self.NON_DUMMY_CELLS)}
+        self._i_j_to_idx = {self._idx_to_i_j[idx]: idx for idx in range(self.NON_DUMMY_CELLS)}
 
         if init_fig:
             self._init_fig(interactive_plot)
@@ -73,14 +78,45 @@ class MarbleSolitaireEnv(gym.Env):
         board = np.full(fill_value=CellState.FULL, shape=(self.BOARD_HEIGHT, self.BOARD_WIDTH), dtype=np.uint8)
 
         board[self.BOARD_HEIGHT // 2, self.BOARD_WIDTH // 2] = CellState.EMPTY  # middle cell is empty
-        board[:2, :2] = CellState.DUMMY
-        board[-2:, :2] = CellState.DUMMY
-        board[:2, -2:] = CellState.DUMMY
-        board[-2:, -2:] = CellState.DUMMY
+        board[:self.DUMMY_DIM, :self.DUMMY_DIM] = CellState.DUMMY
+        board[-self.DUMMY_DIM:, :self.DUMMY_DIM] = CellState.DUMMY
+        board[:self.DUMMY_DIM, -self.DUMMY_DIM:] = CellState.DUMMY
+        board[-self.DUMMY_DIM:, -self.DUMMY_DIM:] = CellState.DUMMY
 
         return board
 
-    def _is_valid_action(self, i, j, a):
+    def _board_to_obs(self, board):
+        return board[board != CellState.DUMMY]
+
+    def i_j_to_idx(self, i, j):
+        return self._i_j_to_idx[(i, j)]
+
+    def idx_to_i_j(self, idx):
+        small_pack = (self.DUMMY_DIM * self.BOARD_WIDTH - (self.DUMMY_DIM ** 2) * 2)
+        small_pack_cols = self.BOARD_WIDTH - 2 * self.DUMMY_DIM
+        small_pack_rows = small_pack // small_pack_cols
+
+        middle_pack_cols = self.BOARD_WIDTH
+        middle_pack_rows = self.BOARD_HEIGHT - 2 * self.DUMMY_DIM
+        middle_pack = middle_pack_rows * middle_pack_cols
+
+        if idx < small_pack:  # top pack
+            i = idx // small_pack_cols
+            j = idx % small_pack_cols + self.DUMMY_DIM
+        elif idx >= (self.MAX_MARBLES_NUM + 1 - small_pack):  # bottom pack
+            offset_idx = idx - middle_pack - small_pack
+            i = small_pack_rows + middle_pack_rows + offset_idx // small_pack_cols
+            j = offset_idx % small_pack_cols + self.DUMMY_DIM
+        else:  # middle pack
+            offset_idx = idx - small_pack
+            i = small_pack_rows + offset_idx // middle_pack_cols
+            j = offset_idx % middle_pack_cols
+
+        return i, j
+
+    def _is_valid_action(self, idx: int, a: MarbleAction):
+        i, j = self._idx_to_i_j[idx]
+
         if self.board[i, j] != CellState.FULL:
             return False
 
@@ -101,7 +137,7 @@ class MarbleSolitaireEnv(gym.Env):
     def _finish_reward(self):
         if self.marbles_num == 1:
             if self.board[self.BOARD_HEIGHT // 2, self.BOARD_WIDTH // 2] == CellState.FULL:
-                return 0
+                return 10**4
             else:
                 return -self.MAX_MARBLES_NUM
         else:
@@ -110,24 +146,33 @@ class MarbleSolitaireEnv(gym.Env):
     def _reward(self):
         return self._state_reward() + self._finish_reward() - self.step_counter
 
+    def _invalid_reward(self):
+        return self._reward() - 100
+
+    def _valid_reward(self):
+        return self._reward()
+
+    def _is_done(self):
+        if self.marbles_num == 1:
+            return True
+
+        for idx in range(self.NON_DUMMY_CELLS):
+            for a in list(MarbleAction):
+                if self._is_valid_action(idx, a):
+                    return False
+        return True
+
     def step(self, action):
         self.step_counter += 1
 
-        i, j, a = action
-
-        if self.board[i, j] == CellState.DUMMY:
-            obs = self.board.flatten()
-            reward = self._reward() * 100
-            done = False
-            info = {}
-
-            return obs, reward, done, info
+        idx, a = action
+        i, j = self._idx_to_i_j[idx]
 
         # TODO: update reward/cost etc.
         # Execute one time step within the environment
-        if not self._is_valid_action(i, j, a):
-            obs = self.board.flatten()
-            reward = self._reward() * 10
+        if not self._is_valid_action(idx, a):
+            obs = self._board_to_obs(self.board)
+            reward = self._invalid_reward()
             done = False
             info = {}
 
@@ -150,9 +195,9 @@ class MarbleSolitaireEnv(gym.Env):
 
         self.marbles_num -= 1
 
-        obs = self.board.flatten()
-        reward = self._reward()
-        done = self.marbles_num == 1 and self.board[self.BOARD_HEIGHT // 2, self.BOARD_WIDTH // 2] == CellState.FULL
+        obs = self._board_to_obs(self.board)
+        reward = self._valid_reward()
+        done = self._is_done()
         info = {}
 
         return obs, reward, done, info
@@ -164,7 +209,7 @@ class MarbleSolitaireEnv(gym.Env):
         self.marbles_num = self.MAX_MARBLES_NUM
         self.step_counter = 0
 
-        return self.board.flatten()
+        return self._board_to_obs(self.board)
 
     def render(self, action=None, show_action=False, show_axes=True):
         """
@@ -185,7 +230,10 @@ class MarbleSolitaireEnv(gym.Env):
         ax.axes.get_yaxis().set_visible(show_axes)
         if show_action:
             assert action is not None
-            y, x, a = action   # FLIP x, y here because of (i,j) and (x,y) "un-sync"
+            idx, a = action  # FLIP x, y here because of (i,j) and (x,y) "un-sync"
+            y, x = self._idx_to_i_j[idx]
+
+            y = self.BOARD_HEIGHT - 1 - y
 
             if a == MarbleAction.UP:
                 dx, dy = 0, 1
@@ -199,7 +247,10 @@ class MarbleSolitaireEnv(gym.Env):
             jumped_pos = (x + dx, y + dy)
 
             for pos, value in np.ndenumerate(self.board):
-                pos = pos[::-1]   # FLIP pos here because of (i,j) and (x,y) "un-sync"
+                x_pos, y_pos = pos[::-1]  # FLIP pos here because of (i,j) and (x,y) "un-sync"
+                y_pos = self.BOARD_HEIGHT - 1 - y_pos
+
+                pos = (x_pos, y_pos)
 
                 if value == CellState.FULL:
                     if pos == (x, y):
@@ -215,13 +266,14 @@ class MarbleSolitaireEnv(gym.Env):
         else:
             assert action is None
             for pos, value in np.ndenumerate(self.board):
-                pos = pos[::-1]   # FLIP pos here because of (i,j) and (x,y) "un-sync"
+                x, y = pos[::-1]  # FLIP pos here because of (i,j) and (x,y) "un-sync"
+                y = self.BOARD_HEIGHT - 1 - y
 
                 if value == CellState.FULL:
-                    ax.add_patch(matplotlib.patches.Circle(xy=pos, radius=0.495, color='burlywood', fill=True))
+                    ax.add_patch(matplotlib.patches.Circle(xy=(x, y), radius=0.495, color='burlywood', fill=True))
                 if value == CellState.EMPTY:
                     ax.add_patch(
-                        matplotlib.patches.Circle(xy=pos, radius=0.495, color='burlywood', fill=False, linewidth=1.5))
+                        matplotlib.patches.Circle(xy=(x, y), radius=0.495, color='burlywood', fill=False, linewidth=1.5))
 
         plt.ylim(-4, 4)
         plt.xlim(-4, 4)
@@ -236,19 +288,21 @@ if __name__ == '__main__':
     env.render()
     plt.show()
 
-    i, j, a = 3, 1, MarbleAction.RIGHT
-    assert env._is_valid_action(i, j, a)
-    env.render(action=(i, j, a), show_action=True)
+    i, j, a = 1, 3, MarbleAction.DOWN
+    idx = env.i_j_to_idx(i, j)
+    assert env._is_valid_action(idx, a)
+    env.render(action=(idx, a), show_action=True)
     plt.show()
-    env.step((i, j, a))
+    env.step((idx, a))
     env.render()
     plt.show()
 
-    i, j, a = 3, 4, MarbleAction.LEFT
-    assert env._is_valid_action(i, j, a)
-    env.render(action=(i, j, a), show_action=True)
+    i, j, a = 4, 3, MarbleAction.UP
+    idx = env.i_j_to_idx(i, j)
+    assert env._is_valid_action(idx, a)
+    env.render(action=(idx, a), show_action=True)
     plt.show()
-    env.step((i, j, a))
+    env.step((idx, a))
     env.render()
     plt.show()
 

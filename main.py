@@ -21,8 +21,9 @@ if __name__ == '__main__':
     obs = env.reset()
     for i in range(100):
         action, _states = model.predict(obs)
-        print(f'i:{action[0]}, j:{action[1]}, a:{MarbleAction(action[2]).name}')
+        # print(f'i:{action[0]}, j:{action[1]}, a:{MarbleAction(action[2]).name}')
         if env._is_valid_action(*action):
+            print(f'i,j: {env.idx_to_i_j(action[0])}, a:{MarbleAction(action[1]).name}')
             env.render(action=action, show_action=True)
             plt.show()
         obs, rewards, dones, info = env.step(action)
